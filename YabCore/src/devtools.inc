@@ -11,6 +11,9 @@ struct DevToolsRelay {
   std::set<std::string> children;
   std::map<int, NSDictionary*> messages;
   bool stopped = false, inspect = false, tabTarget = false;
+  // Chrome's docked frontend (can_dock): its own dock sides and device
+  // mode, the client placing the page where setInspectedPageBounds says.
+  bool dock = false;
   int x = 0, y = 0;
   int extensionTab = 0;
   std::map<std::string, NSString*> savedFiles;
@@ -155,8 +158,10 @@ class DevToolsServer : public CefServerHandler {
             relay->tabTarget = type == "tab";
             if (type != "tab" && type != "service_worker" && type != "shared_worker" && type != "worker")
               relay->pageSession = relay->session;
-            NSString* url = [NSString stringWithFormat:@"devtools://devtools/bundled/%s?ws=%s/%s%s",
-              DevToolsFrontend(type).c_str(), address.c_str(), relay->token.c_str(), DevToolsTargetQuery(type).c_str()];
+            bool dock = relay->dock && DevToolsFrontend(type) == "devtools_app.html";
+            NSString* url = [NSString stringWithFormat:@"devtools://devtools/bundled/%s?ws=%s/%s%s%s",
+              DevToolsFrontend(type).c_str(), address.c_str(), relay->token.c_str(), DevToolsTargetQuery(type).c_str(),
+              dock ? "&can_dock=true" : ""];
             auto load = [relay, request, url, target](NSDictionary*, NSString* error) {
               auto front = tabs.find(relay->front);
               if (relay->stopped || front == tabs.end() || front->second.closing) return;
@@ -268,6 +273,7 @@ static bool DevToolsRequest(Tab& t, NSString* method, NSDictionary* p, NSString*
   relay->owner = owner; relay->front = front; relay->token = Key(NSUUID.UUID.UUIDString);
   relay->extensionTab = extensionTab;
   relay->target = S(p, @"targetId");
+  relay->dock = [p[@"dock"] boolValue];
   if (p[@"x"] && p[@"y"]) { relay->inspect = true; relay->x = [p[@"x"] intValue]; relay->y = [p[@"y"] intValue]; }
   devToolsRelays[front] = relay;
   CefServer::CreateServer("127.0.0.1", 0, 1, new DevToolsServer(relay, request));

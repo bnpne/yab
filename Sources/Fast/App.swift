@@ -1053,7 +1053,7 @@ struct ContentView: View {
                         // A chat in full on the right, the page making room
                         // as it does for the sheet (ChatColumn.swift).
                         ChatRoom(open: browser.chatOpen, rim: devRim, width: chatShown, leading: browser.chatLeads) {
-                        DevRoom(open: devHere && browser.devOpen && !browser.devDetached, side: browser.devSide, rim: devRim, height: devSize.height, width: devSize.width) {
+                        DevRoom(open: devHere && browser.devOpen && !browser.devDetached && !tab.chromeWhole, side: browser.devSide, rim: devRim, height: devSize.height, width: devSize.width) {
                         SplitRoom(drag: browser.splitDrag, preview: browser.splitPreview, share: browser.stagePair?.share ?? 0.5, book: browser.splitBook, measured: { browser.floorWindow() }) {
                             ForEach(0..<2, id: \.self) { slot in
                                 if let id = browser.stages[slot], let tab = browser.tabs.first(where: { $0.id == id }) {
@@ -1068,7 +1068,8 @@ struct ContentView: View {
                                     .zIndex(2)
                             }
                         }
-                            if devHere && !browser.devDetached && (browser.devOpen || browser.devMoving) {
+                            // Chrome's whole DevTools stands in the page's place instead (Tab.chromeWhole).
+                            if devHere && !browser.devDetached && !tab.chromeWhole && (browser.devOpen || browser.devMoving) {
                                 DevSheet(browser: browser, tab: tab, log: tab.devLog, pane: browser.devPane, panels: browser.devPanels, filter: browser.issueFilter, side: browser.devSide,
                                          shown: browser.devOpen, corner: devRim.corner)
                             }

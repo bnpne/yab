@@ -167,6 +167,8 @@ extension Browser {
     /// The device button: the page as a device, or itself again.
     func toggleDevice() {
         guard let tab = active else { return }
+        // Chrome's whole DevTools is out over it: Chrome's own device toolbar.
+        if tab.chromeWhole, let chrome = tab.chromiumDev { chrome.action("emulation.toggle-device-mode"); return }
         // On again as the device it was last, as Chromium's toolbar comes back.
         tab.setDevice(tab.device == nil ? DevMemory.device ?? DeviceMode(name: DeviceMode.responsive, width: 400, height: 800) : nil)
     }

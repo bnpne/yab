@@ -76,7 +76,8 @@ struct Page: View {
                 holding: holding, following: following, tracking: tracking,
                 protectsViewportGrowth: protectsViewportGrowth,
                 sidebarPin: sidebarPin,
-                shade: tab.shade, tone: tab.tone, device: tab.device
+                shade: tab.shade, tone: tab.tone, device: tab.device,
+                whole: tab.chromeWhole ? tab.chromiumDev : nil
             )
 
             overlays
@@ -212,6 +213,8 @@ struct WebStage: NSViewRepresentable {
     var tone: NSColor?
     /// Device mode: the page at this device's size (DevDevice.swift).
     var device: DeviceMode?
+    /// Chrome's whole DevTools in the page's place (Tab.chromeWhole).
+    var whole: ChromiumDevFrontend?
 
     func makeNSView(context: Context) -> StageView {
         let stage = StageView()
@@ -242,6 +245,7 @@ struct WebStage: NSViewRepresentable {
         view.protectsViewportGrowth = protectsViewportGrowth
         view.away = away
         view.device = device
+        view.whole = whole
         // A switch whose page went on this stage ahead of SwiftUI (Browser's
         // DEFER_SWITCH): until it is written, an update for the tab still
         // in front doesn't take the stage back from it.
@@ -443,6 +447,11 @@ final class StageView: NSView {
     /// stage under the bar, drawn at the scale that fits (DevDevice.swift).
     var device: DeviceMode? {
         didSet { if device != oldValue { needsLayout = true } }
+    }
+    /// Chrome's whole DevTools window over the stage, under the page, the
+    /// page where it says (ChromiumDevFrontend.place).
+    weak var whole: ChromiumDevFrontend? {
+        didSet { if whole !== oldValue { needsLayout = true } }
     }
     /// The scale the page was last given, told to WebKit only when it
     /// changes: the stage lays out on every frame of a slide.
@@ -1536,7 +1545,8 @@ final class StageView: NSView {
         // stage lays out on every frame of a slide, and nearly always holds
         // the page alone.
         let docked = subviews.contains { $0 !== wanted && $0 !== leaving } && inspecting
-        for view in subviews where view !== wanted && view !== leaving && !(docked && Self.isInspector(view)) {
+        let front = whole?.page
+        for view in subviews where view !== wanted && view !== leaving && view !== front && !(docked && Self.isInspector(view)) {
             view.removeFromSuperview()
         }
 
@@ -1585,6 +1595,19 @@ final class StageView: NSView {
         // side as the stage changes size; a frame set here would cover it.
         if docked, subviews.contains(where: Self.isInspector) {
             stopFollowing()
+            return
+        }
+        // Chrome's whole DevTools: its window fills the stage, the page on
+        // it where its frontend says, as Chrome docks one. Until it has
+        // said, the page covers it. This view's y runs up.
+        if let whole, let front, wanted is ChromiumPage {
+            stopFollowing()
+            if front.superview !== self || subviews.firstIndex(of: front) ?? 0 > subviews.firstIndex(of: wanted) ?? 0 {
+                addSubview(front, positioned: .below, relativeTo: wanted)
+            }
+            if front.frame != bounds { front.frame = bounds }
+            let frame = whole.place.map { CGRect(x: $0.minX, y: bounds.height - $0.maxY, width: $0.width, height: $0.height) } ?? bounds
+            if wanted.frame != frame { wanted.frame = frame }
             return
         }
         var frame = held.map { CGRect(x: shifted.x, y: bounds.height - $0.height + shifted.y, width: $0.width, height: $0.height) } ?? bounds

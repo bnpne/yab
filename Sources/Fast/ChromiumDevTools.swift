@@ -24,9 +24,24 @@ final class ChromiumDevFrontend {
     fileprivate var wantsFocus = false
     private var waitingAction: String?
     fileprivate var beat: Task<Void, Never>?
+    /// Chrome's whole window in the page's place (Tab.chromeWhole): its own
+    /// row of tabs, dock sides and device mode, the page where it says.
+    let docked: Bool
+    /// Where Chrome puts the page, in the frontend's points from its top
+    /// left; nil until it has said, the page over all of it till then.
+    private(set) var place: CGRect?
+    private var dockBeat: Task<Void, Never>?
 
-    init?(owner: Tab, browser: Browser) {
+    /// A page on this Mac, a dev server's: Chrome's whole DevTools for it.
+    static func wholeFor(_ url: URL?) -> Bool {
+        guard let url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let host = url.host()?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")) else { return false }
+        return host == "localhost" || host.hasSuffix(".localhost") || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0"
+    }
+
+    init?(owner: Tab, browser: Browser, docked: Bool = false) {
         self.owner = owner
+        self.docked = docked
         let profile = owner.chromiumProfile
         tab = Tab(shy: owner.shy, configuration: Web.configuration(shy: owner.shy, store: owner.store), engine: .chromium)
         events.browser = browser
@@ -47,6 +62,7 @@ final class ChromiumDevFrontend {
                 do {
                     let (core, id) = try await ownerPage.endpoint()
                     var params: [String: JSONValue] = ["tab": .string(id)]
+                    if self?.docked == true { params["dock"] = .bool(true) }
                     if let point {
                         params["x"] = .number(Double(max(point.x, 1)))
                         params["y"] = .number(Double(max(point.y, 1)))
@@ -70,14 +86,16 @@ final class ChromiumDevFrontend {
     /// Chrome closed it, with the page or the helper.
     private func ended() {
         beat?.cancel()
-        if owner?.chromiumDev === self { owner?.chromiumDev = nil }
+        dockBeat?.cancel()
+        if owner?.chromiumDev === self { owner?.chromiumDev = nil; owner?.chromeWhole = false }
         tab.close()
     }
 
     func close() {
         beat?.cancel()
+        dockBeat?.cancel()
         (owner?.builtPage as? ChromiumPage)?.command("devtools.close")
-        if owner?.chromiumDev === self { owner?.chromiumDev = nil }
+        if owner?.chromiumDev === self { owner?.chromiumDev = nil; owner?.chromeWhole = false }
         page.onDocumentClosed = nil
         tab.close()
     }
@@ -88,7 +106,7 @@ final class ChromiumDevFrontend {
     private static let readState = legacy + """
     const v = U.InspectorView.InspectorView.maybeGetInspectorViewInstance();
     if (!v || !v.tabbedPane) return {ready: false};
-    v.tabbedPane.headerElement().style.display = 'none';
+    if (!docked) v.tabbedPane.headerElement().style.display = 'none';
     const pane = v.tabbedPane;
     const panels = pane.tabIds().filter(id => id.startsWith('chrome-extension://'))
         .map(id => ({id, title: String(pane.tabView(id)?.title?.() ?? pane.tabs?.find(t => t.id === id)?.title ?? id)}));
@@ -126,16 +144,67 @@ final class ChromiumDevFrontend {
     /// Reads the frontend while the card is out on its tab: what it shows,
     /// and which panels extensions gave it. Quick until it is up.
     fileprivate func watch(in browser: Browser) {
+        if docked, dockBeat == nil { follow() }
         beat?.cancel()
         beat = Task { @MainActor [weak self, weak browser] in
             while !Task.isCancelled {
                 guard let self, let browser, browser.chromiumDevFront?.chromiumDev === self else { return }
-                if let state = try? await self.page.call(Self.readState, gesture: false) as? [String: Any], !Task.isCancelled {
+                if let state = try? await self.page.call(Self.readState, arguments: ["docked": self.docked], gesture: false) as? [String: Any], !Task.isCancelled {
                     self.heard(state, browser: browser)
                 }
                 try? await Task.sleep(for: .milliseconds(self.ready ? 400 : 80))
             }
         }
+    }
+
+    /// What the docked frontend told its embedder (__yabDock, YabCore's
+    /// devtools_files.h), waited for: the page's place, docking, closing.
+    private static let dockState = """
+    const d = globalThis.__yabDock;
+    if (!d) return null;
+    if (d.turn === seen) await new Promise(wake => { d.waiting.push(wake); setTimeout(wake, 4000); });
+    return {turn: d.turn, bounds: d.bounds, docked: d.docked, closed: d.closed};
+    """
+    /// Undocked from Chrome's own menu: back to the side it was on. The
+    /// frontend has no window of its own to go to here.
+    private static let redock = """
+    const C = await import('devtools://devtools/bundled/core/common/common.js');
+    const last = C.Settings.Settings.instance().createSetting('last-dock-state', 'right').get();
+    U.DockController.DockController.instance().setDockSide(last && last !== 'undocked' ? last : 'right');
+    """
+
+    private func follow() {
+        dockBeat = Task { @MainActor [weak self] in
+            var seen = -1, closed = 0
+            while !Task.isCancelled {
+                guard let self, !self.page.retired else { return }
+                guard let state = try? await self.page.call(Self.dockState, arguments: ["seen": seen], gesture: false) as? [String: Any] else {
+                    try? await Task.sleep(for: .milliseconds(150))
+                    continue
+                }
+                guard !Task.isCancelled else { return }
+                seen = (state["turn"] as? NSNumber)?.intValue ?? seen
+                if let b = state["bounds"] as? [String: Any], let x = (b["x"] as? NSNumber)?.doubleValue, let y = (b["y"] as? NSNumber)?.doubleValue,
+                   let width = (b["width"] as? NSNumber)?.doubleValue, let height = (b["height"] as? NSNumber)?.doubleValue {
+                    placed(CGRect(x: x, y: y, width: max(0, width), height: max(0, height)))
+                }
+                if state["docked"] as? Bool == false { run(Self.redock) }
+                let asked = (state["closed"] as? NSNumber)?.intValue ?? 0
+                if asked > closed {
+                    closed = asked
+                    // Chrome's own close button: the tools away, as ⌥⌘I.
+                    if let browser = events.browser, browser.toolsFront === owner { browser.closeDevTools() } else { close() }
+                    return
+                }
+            }
+        }
+    }
+
+    /// The page goes where Chrome said, on its stage, at once.
+    private func placed(_ rect: CGRect) {
+        guard rect != place else { return }
+        place = rect
+        (owner?.builtPage as? NSView)?.superview?.needsLayout = true
     }
 
     private func heard(_ state: [String: Any], browser: Browser) {
@@ -222,7 +291,16 @@ extension Browser {
     /// The frontend up for `tab`, on `pane`, or the point to inspect.
     func showChromiumDev(_ tab: Tab, pane: DevPane, inspecting point: CGPoint? = nil, focus: Bool = true) {
         let made = tab.chromiumDev == nil
-        if made { tab.chromiumDev = ChromiumDevFrontend(owner: tab, browser: self) }
+        if made {
+            // A local page gets Chrome's whole window in its place; any other the card.
+            let whole = ChromiumDevFrontend.wholeFor(tab.address)
+            tab.chromiumDev = ChromiumDevFrontend(owner: tab, browser: self, docked: whole)
+            if whole, tab.chromiumDev != nil {
+                // Chrome's device mode, not Yab's, emulates in it.
+                if tab.device != nil { tab.setDevice(nil, remember: false) }
+                tab.chromeWhole = true
+            }
+        }
         guard let frontend = tab.chromiumDev else { return }
         frontend.watch(in: self)
         if devPanels != frontend.panels { devPanels = frontend.panels }

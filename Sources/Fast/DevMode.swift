@@ -1029,7 +1029,7 @@ struct DevSheet: View {
                     .allowsHitTesting(pane.isWebKit && !chromium)
                 if chromium {
                     // Waits for its row of tabs to be put away (chromiumDevReady).
-                    ChromiumDevHost(page: tab.chromiumDev?.page)
+                    ChromiumDevHost(page: tab.chromeWhole ? nil : tab.chromiumDev?.page)
                         .opacity(tab.chromiumDevReady > 0 ? 1 : 0)
                 } else if !pane.isWebKit {
                     DevKeyHost {

@@ -518,7 +518,7 @@ extension Browser {
     /// Out again as they went away (DevMemory): in their own window if
     /// they were, the page as the device it was shown as.
     private func comeBack(_ tab: Tab) {
-        if DevMemory.deviceOn, tab.device == nil, let device = DevMemory.device { tab.setDevice(device, remember: false) }
+        if DevMemory.deviceOn, tab.device == nil, !tab.chromeWhole, let device = DevMemory.device { tab.setDevice(device, remember: false) }
         // Chrome's frontend lives only in the docked card: the separate
         // window is WebKit's own inspector window (DevFloating), which a
         // Chromium page never has. Detached, its card was hidden and

@@ -1592,6 +1592,11 @@ final class Tab: ObservableObject, Identifiable, Relaying {
     @ObservationIgnored var chromiumDev: ChromiumDevFrontend?
     /// Goes up as they come up, for the card to show them.
     var chromiumDevReady = 0
+    /// Chrome's DevTools window in the page's place, a local page in it
+    /// where Chrome puts it, instead of the card (ChromiumDevTools.swift).
+    var chromeWhole = false {
+        willSet { relay.send(\.chromeWhole, newValue) }
+    }
     /// Documents committed in this tab, counted: its inspector put away
     /// while another tab was in front comes back to the same document only
     /// if this has not moved (DevReturn.swift).
